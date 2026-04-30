@@ -40,3 +40,7 @@ export {
 
 // Hashing
 export { hashPayload } from "./hash.js";
+
+// OpenClaw plugin
+export { zeroFrictionTool } from "./openclaw-plugin.js";
+export type { OpenClawToolContext, OpenClawToolInput } from "./openclaw-plugin.js";

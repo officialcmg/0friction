@@ -1,0 +1,28 @@
+{
+  "name": "@0friction/backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "0friction solver backend — 0G compute relay + USDC settlement",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@0gfoundation/0g-compute-ts-sdk": "latest",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "ethers": "^6.13.0",
+    "express": "^4.21.0",
+    "uuid": "^10.0.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

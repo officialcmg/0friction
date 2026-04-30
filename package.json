@@ -1,0 +1,15 @@
+{
+  "name": "0friction",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cross-chain payment abstraction for 0G Compute",
+  "workspaces": [
+    "sdk",
+    "backend"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:sdk": "npm run dev --workspace=sdk"
+  }
+}

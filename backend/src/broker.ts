@@ -9,11 +9,11 @@ let solverAddress: string = "";
 
 /**
  * Initialize the 0G Compute Network broker.
- * This connects to 0G Chain and sets up the solver's identity.
+ * Uses require() on the CJS build to avoid ESM/tsx dynamic import issues.
  */
 export async function initBroker(): Promise<void> {
   if (!config.solverPrivateKey) {
-    console.warn("⚠️  No SOLVER_PRIVATE_KEY — broker disabled (mock mode available)");
+    console.warn("⚠️  No SOLVER_PRIVATE_KEY — broker disabled");
     return;
   }
 
@@ -24,17 +24,17 @@ export async function initBroker(): Promise<void> {
 
     console.log(`🔑 Solver address on 0G: ${solverAddress}`);
 
-    // Dynamic import to handle potential module issues
-    const { createZGComputeNetworkBroker } = await import("@0gfoundation/0g-compute-ts-sdk");
-    broker = await createZGComputeNetworkBroker(solverWallet);
+    // Load via CJS shim — bypasses tsx ESM dynamic import interception
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createZGComputeNetworkBroker } = require("./zgSdkShim.js");
 
+    broker = await createZGComputeNetworkBroker(solverWallet);
     console.log("✅ 0G Broker initialized");
 
-    // Check ledger status
+    // Discover available services
     try {
       const services = await broker.inference.listService();
-      console.log(`📋 Found ${services.length} available services on 0G`);
-
+      console.log(`📋 Found ${services.length} service(s) on 0G`);
       const chatServices = services.filter((s: any) => s.serviceType === "chatbot");
       for (const svc of chatServices) {
         console.log(`   📡 ${svc.model} @ ${svc.providerAddress?.slice(0, 10)}...`);
@@ -44,56 +44,58 @@ export async function initBroker(): Promise<void> {
     }
   } catch (err: any) {
     console.error(`❌ Broker init failed: ${err.message}`);
-    console.warn("⚠️  Running without 0G broker — mock mode may be needed");
+    console.warn("⚠️  Falling back to mock mode");
   }
 }
 
 /**
- * Execute an AI inference request via 0G Compute.
- * Returns the AI response text and metadata.
+ * Execute AI inference via 0G Compute Network.
  */
 export async function executeCompute(
   model: string,
   messages: Array<{ role: string; content: string }>,
 ): Promise<{ response: string; computeResponseId?: string }> {
-  // Mock fallback for demo resilience
-  if (!broker || config.enableMockFallback) {
-    console.log("🎭 Mock mode — returning simulated response");
-    await new Promise((r) => setTimeout(r, 800)); // simulate latency
-
+  if (!broker) {
+    console.log("🎭 Mock mode — broker not initialized");
+    await new Promise((r) => setTimeout(r, 600));
     return {
-      response: `[Mock] This is a simulated response from ${model}. In production, this would be a real AI response from 0G Compute Network. Your message had ${messages.length} message(s).`,
+      response: `[Mock — 0G broker unavailable] ${messages[messages.length - 1]?.content}`,
+      computeResponseId: `mock_${Date.now()}`,
+    };
+  }
+
+  if (config.enableMockFallback) {
+    console.log("🎭 Mock mode — ENABLE_MOCK_FALLBACK=true");
+    await new Promise((r) => setTimeout(r, 600));
+    return {
+      response: `[Mock] Message received: "${messages[messages.length - 1]?.content}"`,
       computeResponseId: `mock_${Date.now()}`,
     };
   }
 
   // Find provider for the requested model
   const services = await broker.inference.listService();
-  const service = services.find((s: any) => s.model === model);
+  const service = services.find((s: any) => s.model === model)
+    ?? services.find((s: any) => s.serviceType === "chatbot");
 
   if (!service) {
-    throw new Error(`No provider found for model: ${model}`);
+    throw new Error(`No provider found for model: ${model}. Available: ${services.map((s: any) => s.model).join(", ")}`);
   }
 
   const providerAddress = service.providerAddress;
+  console.log(`⚡ Using provider ${providerAddress?.slice(0, 10)}... model=${service.model}`);
 
-  // Get service metadata (endpoint + model name)
+  // Get service metadata
   const { endpoint, model: providerModel } = await broker.inference.getServiceMetadata(providerAddress);
 
-  // Generate per-request auth headers
+  // Generate per-request auth headers (TEE)
   const headers = await broker.inference.getRequestHeaders(providerAddress);
 
-  // Make OpenAI-compatible inference call
+  // Call OpenAI-compatible endpoint
   const res = await fetch(`${endpoint}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...headers,
-    },
-    body: JSON.stringify({
-      model: providerModel,
-      messages,
-    }),
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({ model: providerModel, messages }),
   });
 
   if (!res.ok) {
@@ -104,20 +106,18 @@ export async function executeCompute(
   const data = await res.json();
   const responseText = data.choices?.[0]?.message?.content ?? "";
 
-  // Verify TEE integrity
+  // TEE response verification
   const chatID = res.headers.get("ZG-Res-Key") || data.id;
   if (chatID) {
     try {
       await broker.inference.processResponse(providerAddress, chatID);
+      console.log("✅ TEE response verified");
     } catch (err: any) {
       console.warn(`⚠️  TEE verification warning: ${err.message}`);
     }
   }
 
-  return {
-    response: responseText,
-    computeResponseId: chatID || data.id,
-  };
+  return { response: responseText, computeResponseId: chatID || data.id };
 }
 
 export function getSolverAddress(): string {

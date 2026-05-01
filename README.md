@@ -126,9 +126,19 @@ console.log(result.response); // AI response from 0G
 |-------|-----------|
 | SDK | TypeScript, viem, EIP-712/EIP-2612 |
 | Backend | Express, ethers.js, @0gfoundation/0g-compute-ts-sdk |
-| Frontend | React, wagmi, viem |
+| Frontend | Next.js 16, wagmi v2, viem |
 | Contract | Solidity 0.8.20, Foundry |
 | Chains | Base Sepolia (payments), 0G Galileo (compute + registry) |
+
+## Roadmap (Post-Hackathon)
+
+This is an initial version built for EthGlobal Open Agents. The following improvements are planned:
+
+1. **More chains and tokens** — Currently Base Sepolia + USDC only. Will extend to Arbitrum, Optimism, and support USDT/DAI.
+2. **Session-based payments** — Remove the need for per-request approvals by allowing users to top up a session account with a larger single approval amount, eliminating the double-signature UX.
+3. **Mainnet deployment** — Deploy IntentRegistry on 0G Mainnet and use real USDC on Base.
+4. **SDK npm publish** — Publish `@0friction/sdk` so any app can integrate in 2 lines.
+5. **OpenClaw integration** — Full composability with the OpenClaw agent framework via the included plugin.
 
 ## Team
 

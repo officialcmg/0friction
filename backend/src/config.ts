@@ -21,7 +21,7 @@ export const config = {
 
   // 0G Provider
   defaultProviderAddress: process.env.DEFAULT_PROVIDER_ADDRESS || "",
-  defaultModel: process.env.DEFAULT_MODEL || "qwen3.6-plus",
+  defaultModel: process.env.DEFAULT_MODEL || "qwen/qwen-2.5-7b-instruct",
 
   // Server
   port: parseInt(process.env.PORT || "3001"),

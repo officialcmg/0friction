@@ -103,7 +103,19 @@ export default function App() {
   // ─── Send Message Flow ─────────────────────────────────────
 
   async function handleSend() {
-    if (!input.trim() || !address || !walletClient || !publicClient || signingStep !== "idle") return;
+    if (!input.trim() || signingStep !== "idle") return;
+    if (!address) {
+      setMessages((prev) => [...prev, { role: "system", content: "Please connect your wallet first." }]);
+      return;
+    }
+    if (!walletClient) {
+      setMessages((prev) => [...prev, { role: "system", content: "Wallet not ready — make sure you're on Base Sepolia (chain 84532) and try again." }]);
+      return;
+    }
+    if (!publicClient) {
+      setMessages((prev) => [...prev, { role: "system", content: "Network error — please refresh and reconnect." }]);
+      return;
+    }
 
     const userMessage = input.trim();
     setInput("");
@@ -354,14 +366,14 @@ export default function App() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isConnected ? "Type your message..." : "Connect wallet to start chatting"}
-            disabled={!isConnected || signingStep !== "idle"}
+            placeholder={address ? "Type your message..." : "Connect wallet to start chatting"}
+            disabled={!address || signingStep !== "idle"}
             rows={1}
           />
           <button
             className="send-btn"
             onClick={handleSend}
-            disabled={!input.trim() || !isConnected || signingStep !== "idle"}
+            disabled={!input.trim() || !address || signingStep !== "idle"}
           >
             ↑
           </button>

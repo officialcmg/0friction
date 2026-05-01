@@ -12,4 +12,4 @@ export const wagmiConfig = createConfig({
 
 export const SOLVER_URL = "http://localhost:3001";
 export const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as `0x${string}`;
-export const SOLVER_ADDRESS = (import.meta.env.VITE_SOLVER_ADDRESS || "0x0000000000000000000000000000000000000001") as `0x${string}`;
+export const SOLVER_ADDRESS = (import.meta.env.VITE_SOLVER_ADDRESS || "0xB9a33C169d1360E6AdFf7266797f85467856bCc2") as `0x${string}`;

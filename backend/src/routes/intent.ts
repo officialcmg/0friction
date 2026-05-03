@@ -91,6 +91,7 @@ router.post("/", async (req, res) => {
     updateJob(job.jobId, { status: "SETTLING" });
 
     let settlementTxHash = "";
+    let settlementError: string | null = null;
     try {
       console.log(`💳 Starting settlement for ${permit.owner}...`);
       console.log(`   permit.value=${permit.value}, permit.deadline=${permit.deadline}, permit.nonce=${permit.nonce}`);
@@ -107,29 +108,36 @@ router.post("/", async (req, res) => {
       settlementTxHash = result.txHash;
       console.log(`✅ Settlement tx: ${settlementTxHash}`);
     } catch (err: any) {
+      settlementError = err.message;
       console.error(`❌ SETTLEMENT FAILED: ${err.message}`);
       console.error(`   Stack: ${err.stack?.split("\n").slice(0, 3).join(" -> ")}`);
-      // Don't fail the whole request — return the AI response anyway
-      updateJob(job.jobId, {
-        status: "FAILED_SETTLEMENT",
-        error: err.message,
-        chargedUsdc: "0",
-      });
     }
 
-    if (settlementTxHash && settlementTxHash.startsWith("0x")) {
-      // Real on-chain settlement succeeded
+    const hasRealSettlementTx = settlementTxHash.startsWith("0x");
+    const isInsufficientFunds = settlementTxHash.includes("insufficient");
+    const isMockSettlement = settlementTxHash.startsWith("mock_settle_");
+
+    if (hasRealSettlementTx) {
       updateJob(job.jobId, {
         status: "SETTLED",
         chargedUsdc: storedQuote.maxChargeUsdc,
         settlementTxHash,
       });
-    } else {
-      // Mock, insufficient USDC, or no settlement
+    } else if (isMockSettlement) {
       updateJob(job.jobId, {
         status: "SETTLED",
-        chargedUsdc: settlementTxHash?.includes("insufficient") ? "0" : storedQuote.maxChargeUsdc,
-        settlementTxHash: settlementTxHash || "pending",
+        chargedUsdc: "0",
+        settlementTxHash,
+        error: "Settlement skipped: HOME_CHAIN_PRIVATE_KEY not configured",
+      });
+    } else {
+      updateJob(job.jobId, {
+        status: "FAILED_SETTLEMENT",
+        chargedUsdc: "0",
+        settlementTxHash: settlementTxHash || undefined,
+        error:
+          settlementError ||
+          (isInsufficientFunds ? "Insufficient user USDC balance" : "Settlement failed before tx confirmation"),
       });
     }
 

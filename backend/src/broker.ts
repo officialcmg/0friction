@@ -1,4 +1,5 @@
 import { ethers } from "ethers";
+import { createZGComputeNetworkBroker } from "@0gfoundation/0g-compute-ts-sdk";
 import { config } from "./config.js";
 
 // ─── Broker State ────────────────────────────────────────────
@@ -7,10 +8,7 @@ let broker: any = null;
 let solverWallet: ethers.Wallet | null = null;
 let solverAddress: string = "";
 
-/**
- * Initialize the 0G Compute Network broker.
- * Uses require() on the CJS build to avoid ESM/tsx dynamic import issues.
- */
+/** Initialize the 0G Compute Network broker. */
 export async function initBroker(): Promise<void> {
   if (!config.solverPrivateKey) {
     console.warn("⚠️  No SOLVER_PRIVATE_KEY — broker disabled");
@@ -23,10 +21,6 @@ export async function initBroker(): Promise<void> {
     solverAddress = await solverWallet.getAddress();
 
     console.log(`🔑 Solver address on 0G: ${solverAddress}`);
-
-    // Load via CJS shim — bypasses tsx ESM dynamic import interception
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { createZGComputeNetworkBroker } = require("./zgSdkShim.js");
 
     broker = await createZGComputeNetworkBroker(solverWallet);
     console.log("✅ 0G Broker initialized");

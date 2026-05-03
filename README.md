@@ -1,156 +1,130 @@
 # 0friction
 
-> **Cross-chain AI compute via 0G — pay with USDC, no bridging required.**
+Cross-chain AI compute via 0G. Pay with USDC, no bridge, no 0G token management for end users.
 
-0friction is a TypeScript SDK + solver backend that lets any EVM app use [0G Compute](https://0g.ai) (decentralized AI inference) without forcing users to hold A0GI tokens, bridge assets, or interact with 0G Chain directly.
+0friction is a framework-level project for the 0G Open Agents track:
+- `@0friction/sdk` (TypeScript SDK for any runtime)
+- Solver backend (0G execution + USDC settlement)
+- Demo frontend and working CLI agent example
 
-Users pay with **USDC on Base** via gasless EIP-2612 permit signatures. The 0friction solver handles all 0G interaction behind the scenes.
+## Live Links
 
-## Architecture
+- Live backend (Render): `https://zerofriction-solver.onrender.com`
+- Live frontend (Vercel): `https://0friction.vercel.app` (update if your final URL differs)
+- npm package: `https://www.npmjs.com/package/@0friction/sdk`
+- GitHub: `https://github.com/officialcmg/0friction`
 
-```
-┌────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   User (Base)  │     │  0friction Solver │     │   0G Compute    │
-│                │     │                  │     │                 │
-│  1. Get quote  │────▶│  Price estimate   │     │                 │
-│  2. Sign intent│     │                  │     │                 │
-│  3. Sign permit│     │  Verify sigs     │     │                 │
-│  4. Submit     │────▶│  Execute compute  │────▶│  AI Inference   │
-│                │     │  Settle USDC     │     │  (TEE verified) │
-│  5. Get result │◀────│  Return response │◀────│                 │
-└────────────────┘     └──────────────────┘     └─────────────────┘
-```
+## Architecture Diagram
 
-**Key innovation:** Users never touch 0G Chain. They sign two gasless signatures on their home chain, and the solver handles everything else.
+![0friction architecture](./architecture-0friction.svg)
 
-## Quick Start
+## Why this matters
 
-```bash
-# Clone
-git clone https://github.com/officialcmg/0friction
-cd 0friction
+0G compute is powerful, but user onboarding breaks when apps require bridging and native token flow. 0friction abstracts that away:
+- users sign gasless auth on home chain
+- solver executes inference on 0G
+- solver settles USDC on home chain
 
-# Install all workspaces
-npm install
-cd frontend && npm install && cd ..
-
-# Configure
-cp .env.example .env
-# Fill in SOLVER_PRIVATE_KEY and RPC URLs
-
-# Terminal 1 — backend (real 0G inference)
-npm run dev --workspace=backend
-
-# Terminal 2 — frontend (Next.js)
-cd frontend && npm run dev
-# Open http://localhost:3000
-# Connect MetaMask on Base Sepolia (chain 84532)
-```
-
-> **Note:** The solver wallet needs A0GI on 0G Galileo for ledger deposits. The demo solver (`0xB9a33C...`) is pre-funded.
+This turns 0G compute into a drop-in developer primitive for agents and apps.
 
 ## Project Structure
 
 ```
 0friction/
-├── sdk/              @0friction/sdk — TypeScript SDK (npm package)
-├── backend/          Solver backend (Express + 0G broker)
-├── frontend/         Demo chat interface (React + wagmi)
-├── contracts/        IntentRegistry.sol (deployed on 0G Chain)
-├── examples/         CLI agent example
-└── .env.example      Environment variables
+├── sdk/              @0friction/sdk (published npm package)
+├── backend/          Solver backend (Express + 0G compute SDK)
+├── frontend/         Next.js demo app
+├── examples/         Working example agent (CLI)
+├── contracts/        IntentRegistry (deployed on 0G Galileo)
+└── architecture-0friction.svg
 ```
 
-## Deployments
+## Deployment and Contracts
 
-| Component | Location |
-|-----------|----------|
-| IntentRegistry | [`0x01D1084d915eAb33A36FBaBFC29Dc8e6478b0926`](https://chainscan-newton.0g.ai/address/0x01D1084d915eAb33A36FBaBFC29Dc8e6478b0926) on 0G Galileo (chain 16602) |
-| Solver Address | `0xB9a33C169d1360E6AdFf7266797f85467856bCc2` on 0G Galileo |
-| USDC (Base Sepolia) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| 0G Ledger Contract | `0xE70830508dAc0A97e6c087c75f402f9Be669E406` (testnet) |
-| 0G Inference Contract | `0xa79F4c8311FF93C06b8CfB403690cc987c93F91E` (testnet) |
-| AI Provider (qwen) | `0xa48f01287233509FD694a22Bf840225062E67836` |
-| Model | `qwen/qwen-2.5-7b-instruct` via 0G Compute TEE |
+- IntentRegistry (0G Galileo / chain 16602):
+  - `0x01D1084d915eAb33A36FBaBFC29Dc8e6478b0926`
+  - https://chainscan-newton.0g.ai/address/0x01D1084d915eAb33A36FBaBFC29Dc8e6478b0926
+- Solver address:
+  - `0xB9a33C169d1360E6AdFf7266797f85467856bCc2`
+- Home-chain payment token (Base Sepolia USDC):
+  - `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
 
-## SDK Usage
+## SDK usage (high level)
 
-```typescript
-import { createClient, COMPUTE_INTENT_TYPES, buildIntentDomain, hashPayload } from "@0friction/sdk";
+```ts
+import { createClient } from "@0friction/sdk";
 
-// 1. Create client
-const client = createClient({
-  solverUrl: "https://solver.0friction.xyz",
-  chainId: 84532,
-  token: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  solver: "0xB9a33C169d1360E6AdFf7266797f85467856bCc2",
-});
+const client = createClient();
 
-// 2. Get price quote
 const quote = await client.quote.get({
-  model: "qwen3.6-plus",
-  prompt: "What is quantum computing?",
+  model: "qwen/qwen-2.5-7b-instruct",
+  prompt: "Explain 0G compute in one sentence.",
 });
 
-// 3. Build intent + sign with your wallet
-const intent = client.intent.build({ quote, owner: userAddress, requestPayload, nonce: "1" });
-const intentSig = await wallet.signTypedData(/* EIP-712 */);
+const intent = client.intent.build({
+  quote,
+  owner: userAddress,
+  requestPayload: {
+    model: "qwen/qwen-2.5-7b-instruct",
+    messages: [{ role: "user", content: "Explain 0G compute in one sentence." }],
+  },
+  nonce: String(Date.now()),
+});
 
-// 4. Sign USDC permit (gasless)
-const permitSig = await wallet.signTypedData(/* EIP-2612 */);
-
-// 5. Submit — get AI response
+// App layer signs intent + permit using viem/ethers/wagmi
 const result = await client.intent.submit({
-  intent, intentSignature: intentSig,
-  permit, permitSignature: permitSig,
-  requestPayload, quoteId: quote.quoteId,
+  intent,
+  intentSignature,
+  permit,
+  permitSignature,
+  requestPayload,
+  quoteId: quote.quoteId,
 });
-
-console.log(result.response); // AI response from 0G
 ```
 
-## How It Works
+## Gasless flow (v1)
 
-1. **Quote** — User requests a price estimate for their prompt
-2. **Sign Intent** — User signs an EIP-712 `ComputeIntent` authorizing the compute job
-3. **Sign Permit** — User signs an EIP-2612 USDC `permit` authorizing the payment
-4. **Submit** — Both signatures are sent to the solver backend
-5. **Execute** — Solver runs AI inference via 0G Compute Network (TEE-verified)
-6. **Settle** — Solver calls `permit()` + `transferFrom()` to collect USDC on Base
-7. **Record** — Intent fulfillment is logged on-chain via IntentRegistry on 0G
+For each request:
+1. SDK fetches quote from solver.
+2. User signs EIP-712 ComputeIntent (gasless signature).
+3. User signs EIP-2612 USDC Permit (gasless signature).
+4. Solver verifies, runs compute on 0G, and settles via `permit + transferFrom`.
+5. App receives response + audit bundle.
 
-**Zero gas for users. Zero bridging. Zero A0GI tokens needed.**
+## Working example agent
 
-## 0G Protocol Features Used
+- CLI agent path: `examples/cli-agent.ts`
+- SDK E2E test path: `test-sdk.ts`
 
-- **0G Compute Network** — Decentralized AI inference via `@0gfoundation/0g-compute-ts-sdk`
-- **TEE Verification** — Response integrity via `processResponse()` TEE attestation
-- **0G Chain** — IntentRegistry contract for on-chain audit trail
-- **Service Discovery** — `listService()` for dynamic provider discovery
+## 0G features used
 
-## Tech Stack
+- 0G Compute inference via `@0gfoundation/0g-compute-ts-sdk`
+- Service discovery (`listService`)
+- TEE response verification (`processResponse`)
+- 0G chain deployment (IntentRegistry contract)
 
-| Layer | Technology |
-|-------|-----------|
-| SDK | TypeScript, viem, EIP-712/EIP-2612 |
-| Backend | Express, ethers.js, @0gfoundation/0g-compute-ts-sdk |
-| Frontend | Next.js 16, wagmi v2, viem |
-| Contract | Solidity 0.8.20, Foundry |
-| Chains | Base Sepolia (payments), 0G Galileo (compute + registry) |
+## Current scope and roadmap
 
-## Roadmap (Post-Hackathon)
+This is an initial version optimized for hackathon reliability:
+- v1: Base Sepolia + USDC + per-request signatures
+- Next: multi-chain settlement and smoother session-style auth (no per-message signing UX)
+- Next: richer agent modules and deeper OpenClaw integrations
 
-This is an initial version built for EthGlobal Open Agents. The following improvements are planned:
+## Quick local run
 
-1. **More chains and tokens** — Currently Base Sepolia + USDC only. Will extend to Arbitrum, Optimism, and support USDT/DAI.
-2. **Session-based payments** — Remove the need for per-request approvals by allowing users to top up a session account with a larger single approval amount, eliminating the double-signature UX.
-3. **Mainnet deployment** — Deploy IntentRegistry on 0G Mainnet and use real USDC on Base.
-4. **SDK npm publish** — Publish `@0friction/sdk` so any app can integrate in 2 lines.
-5. **OpenClaw integration** — Full composability with the OpenClaw agent framework via the included plugin.
+```bash
+npm install
+cp .env.example .env
+npm run dev --workspace=backend
+# in another terminal
+cd frontend && npm run dev
+```
 
 ## Team
 
-Built for **ETHGlobal Open Agents** hackathon — 0G track.
+- Chris Gachau
+- X: `chrismgtweets_`
+- Telegram: `chrismgeth`
 
 ## License
 

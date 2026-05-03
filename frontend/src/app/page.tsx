@@ -9,46 +9,20 @@ import {
   useWalletClient,
   useSwitchChain,
 } from "wagmi";
-import { baseSepolia } from "wagmi/chains";
-import { parseAbi, keccak256, toBytes } from "viem";
+import { parseAbi } from "viem";
+import {
+  createClient,
+  TESTNET_CONFIG,
+  buildIntentDomain,
+  buildPermitDomain,
+  COMPUTE_INTENT_TYPES,
+  PERMIT_TYPES,
+} from "@0friction/sdk";
 
-// ─── Constants ────────────────────────────────────────────────
-
-const SOLVER_URL = process.env.NEXT_PUBLIC_SOLVER_URL || "http://localhost:3001";
-const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as `0x${string}`;
-const SOLVER_ADDRESS = (
-  process.env.NEXT_PUBLIC_SOLVER_ADDRESS ||
-  "0xB9a33C169d1360E6AdFf7266797f85467856bCc2"
-) as `0x${string}`;
+// ─── SDK client (zero-config testnet) ────────────────────────
+const sdk = createClient();
+const { chainId: CHAIN_ID, token: USDC_ADDRESS, solver: SOLVER_ADDRESS } = TESTNET_CONFIG;
 const MODEL = "qwen/qwen-2.5-7b-instruct";
-const CHAIN_ID = 84532;
-
-// ─── EIP-712 types ────────────────────────────────────────────
-
-const INTENT_TYPES = {
-  ComputeIntent: [
-    { name: "owner", type: "address" },
-    { name: "solver", type: "address" },
-    { name: "chainId", type: "uint256" },
-    { name: "token", type: "address" },
-    { name: "model", type: "string" },
-    { name: "promptHash", type: "bytes32" },
-    { name: "quoteId", type: "string" },
-    { name: "maxUsdc", type: "string" },
-    { name: "deadline", type: "uint256" },
-    { name: "nonce", type: "uint256" },
-  ],
-} as const;
-
-const PERMIT_TYPES = {
-  Permit: [
-    { name: "owner", type: "address" },
-    { name: "spender", type: "address" },
-    { name: "value", type: "uint256" },
-    { name: "nonce", type: "uint256" },
-    { name: "deadline", type: "uint256" },
-  ],
-} as const;
 
 const ERC20_ABI = parseAbi([
   "function name() view returns (string)",
@@ -128,7 +102,6 @@ export default function Page() {
       setStep("switching-chain");
       try {
         await switchChain({ chainId: CHAIN_ID });
-        // Brief wait for walletClient to update
         await new Promise((r) => setTimeout(r, 800));
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -150,60 +123,46 @@ export default function Page() {
     setInput("");
 
     try {
-      // 1. Quote
+      // 1. Get quote via SDK
       setStep("quoting");
-      const qRes = await fetch(`${SOLVER_URL}/v1/quote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: MODEL, prompt: text }),
-      });
-      if (!qRes.ok) throw new Error(`Quote failed: ${await qRes.text()}`);
-      const quote = await qRes.json();
+      const quote = await sdk.quote.get({ model: MODEL, prompt: text });
 
-      // 2. Build payload + prompt hash
+      // 2. Build request payload + intent via SDK
       const requestPayload = {
         model: MODEL,
         messages: history
           .filter((m) => m.role !== "system")
           .map((m) => ({ role: m.role, content: m.content })),
       };
-      const promptHash = keccak256(
-        toBytes(JSON.stringify({ model: requestPayload.model, messages: requestPayload.messages }))
-      );
 
-      const intent = {
+      const intent = sdk.intent.build({
+        quote,
         owner: address,
-        solver: SOLVER_ADDRESS,
-        chainId: CHAIN_ID,
-        token: USDC_ADDRESS,
-        model: MODEL,
-        promptHash,
-        quoteId: quote.quoteId,
-        maxUsdc: quote.maxChargeUsdc,
-        deadline: quote.expiresAt,
+        requestPayload,
         nonce: String(nonce),
-      };
+      });
 
-      // 3. Sign compute intent (EIP-712, gasless)
+      // 3. Sign compute intent (EIP-712, gasless) — uses SDK domain + types
       setStep("sign-intent");
       const intentSig = await walletClient.signTypedData({
-        domain: {
-          name: "0friction",
-          version: "1",
-          chainId: BigInt(CHAIN_ID),
-          verifyingContract: "0x0000000000000000000000000000000000000001",
-        },
-        types: INTENT_TYPES,
+        domain: buildIntentDomain(CHAIN_ID),
+        types: COMPUTE_INTENT_TYPES,
         primaryType: "ComputeIntent",
         message: {
-          ...intent,
-          chainId: BigInt(CHAIN_ID),
+          owner: intent.owner,
+          solver: intent.solver,
+          chainId: BigInt(intent.chainId),
+          token: intent.token,
+          model: intent.model,
+          promptHash: intent.promptHash,
+          quoteId: intent.quoteId,
+          maxUsdc: intent.maxUsdc,
           deadline: BigInt(intent.deadline),
           nonce: BigInt(intent.nonce),
         },
       });
 
-      // 4. Read USDC nonce + domain, sign permit (EIP-2612, gasless)
+      // 4. Read USDC nonce + domain, sign permit (EIP-2612, gasless) — uses SDK domain + types
       setStep("sign-permit");
       let usdcName = "USD Coin";
       let usdcVer = "2";
@@ -225,7 +184,7 @@ export default function Page() {
       };
 
       const permitSig = await walletClient.signTypedData({
-        domain: { name: usdcName, version: usdcVer, chainId: BigInt(CHAIN_ID), verifyingContract: USDC_ADDRESS },
+        domain: buildPermitDomain(CHAIN_ID, USDC_ADDRESS, usdcName, usdcVer),
         types: PERMIT_TYPES,
         primaryType: "Permit",
         message: {
@@ -237,22 +196,16 @@ export default function Page() {
         },
       });
 
-      // 5. Submit to solver → triggers real 0G compute + USDC settlement
+      // 5. Submit via SDK → triggers real 0G compute + USDC settlement
       setStep("submitting");
-      const sRes = await fetch(`${SOLVER_URL}/v1/intent/submit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          intent,
-          intentSignature: intentSig,
-          permit,
-          permitSignature: permitSig,
-          requestPayload,
-          quoteId: quote.quoteId,
-        }),
+      const result = await sdk.intent.submit({
+        intent,
+        intentSignature: intentSig,
+        permit,
+        permitSignature: permitSig,
+        requestPayload,
+        quoteId: quote.quoteId,
       });
-      if (!sRes.ok) throw new Error(`Submit failed (${sRes.status}): ${await sRes.text()}`);
-      const result = await sRes.json();
 
       setNonce((n) => n + 1);
       setSpent((s) => s + parseFloat(result.auditBundle?.chargedUsdc || "0"));

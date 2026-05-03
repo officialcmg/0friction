@@ -5,7 +5,8 @@
   "description": "Cross-chain payment abstraction for 0G Compute",
   "workspaces": [
     "sdk",
-    "backend"
+    "backend",
+    "frontend"
   ],
   "scripts": {
     "build": "npm run build --workspaces",

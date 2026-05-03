@@ -2,7 +2,7 @@
 // https://github.com/your-repo/0friction
 
 // Client
-export { createClient, type ZeroFrictionClient } from "./client.js";
+export { createClient, TESTNET_CONFIG, type ZeroFrictionClient } from "./client.js";
 
 // Types
 export type {

@@ -1,14 +1,14 @@
 // ─── Core Config ─────────────────────────────────────────────
 
-/** Configuration for creating a 0friction client */
+/** Configuration for creating a 0friction client. All fields have testnet defaults. */
 export interface ZeroFrictionConfig {
-  /** URL of the 0friction solver backend */
+  /** URL of the 0friction solver backend. Defaults to the hosted testnet solver. */
   solverUrl: string;
-  /** Home chain ID (e.g. 84532 for Base Sepolia, 8453 for Base mainnet) */
+  /** Home chain ID. Defaults to 84532 (Base Sepolia). */
   chainId: number;
-  /** USDC contract address on the home chain */
+  /** USDC contract address on the home chain. Defaults to USDC on Base Sepolia. */
   token: `0x${string}`;
-  /** Solver wallet address (receives USDC payments) */
+  /** Solver wallet address (receives USDC). Defaults to testnet solver. */
   solver: `0x${string}`;
 }
 

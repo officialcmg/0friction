@@ -10,7 +10,7 @@ Cross-chain AI compute via 0G. Pay with USDC, no bridge, no 0G token management 
 ## Live Links
 
 - Live backend (Render): `https://zerofriction-solver.onrender.com`
-- Live frontend (Vercel): `https://0friction.vercel.app` (update if your final URL differs)
+- Live frontend (Vercel): `https://0friction.vercel.app` 
 - npm package: `https://www.npmjs.com/package/@0friction/sdk`
 - GitHub: `https://github.com/officialcmg/0friction`
 

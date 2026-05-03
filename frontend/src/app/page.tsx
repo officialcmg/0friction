@@ -7,18 +7,19 @@ import {
   useDisconnect,
   usePublicClient,
   useWalletClient,
+  useSwitchChain,
 } from "wagmi";
+import { baseSepolia } from "wagmi/chains";
 import { parseAbi, keccak256, toBytes } from "viem";
 
 // ─── Constants ────────────────────────────────────────────────
 
-const SOLVER_URL =
-  process.env.NEXT_PUBLIC_SOLVER_URL || "http://localhost:3001";
-const USDC_ADDRESS =
-  "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as `0x${string}`;
-const SOLVER_ADDRESS =
-  (process.env.NEXT_PUBLIC_SOLVER_ADDRESS ||
-    "0xB9a33C169d1360E6AdFf7266797f85467856bCc2") as `0x${string}`;
+const SOLVER_URL = process.env.NEXT_PUBLIC_SOLVER_URL || "http://localhost:3001";
+const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as `0x${string}`;
+const SOLVER_ADDRESS = (
+  process.env.NEXT_PUBLIC_SOLVER_ADDRESS ||
+  "0xB9a33C169d1360E6AdFf7266797f85467856bCc2"
+) as `0x${string}`;
 const MODEL = "qwen/qwen-2.5-7b-instruct";
 const CHAIN_ID = 84532;
 
@@ -66,19 +67,15 @@ interface Message {
   jobId?: string;
 }
 
-type Step =
-  | "idle"
-  | "quoting"
-  | "sign-intent"
-  | "sign-permit"
-  | "submitting";
+type Step = "idle" | "switching-chain" | "quoting" | "sign-intent" | "sign-permit" | "submitting";
 
 // ─── Page ─────────────────────────────────────────────────────
 
 export default function Page() {
-  const { address } = useAccount();
+  const { address, chainId } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
+  const { switchChain } = useSwitchChain();
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
 
@@ -91,6 +88,8 @@ export default function Page() {
 
   const chatRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const isConnected = !!address;
+  const isWrongChain = isConnected && chainId !== CHAIN_ID;
 
   // Auto-scroll
   useEffect(() => {
@@ -103,17 +102,8 @@ export default function Page() {
     (async () => {
       try {
         const [bal, dec] = await Promise.all([
-          publicClient.readContract({
-            address: USDC_ADDRESS,
-            abi: ERC20_ABI,
-            functionName: "balanceOf",
-            args: [address],
-          }),
-          publicClient.readContract({
-            address: USDC_ADDRESS,
-            abi: ERC20_ABI,
-            functionName: "decimals",
-          }),
+          publicClient.readContract({ address: USDC_ADDRESS, abi: ERC20_ABI, functionName: "balanceOf", args: [address] }),
+          publicClient.readContract({ address: USDC_ADDRESS, abi: ERC20_ABI, functionName: "decimals" }),
         ]);
         setBalance((Number(bal) / 10 ** Number(dec)).toFixed(2));
       } catch {
@@ -132,11 +122,25 @@ export default function Page() {
       setMessages((m) => [...m, { role: "system", content: "Connect your wallet first." }]);
       return;
     }
+
+    // Auto-switch chain if on wrong network
+    if (chainId !== CHAIN_ID) {
+      setStep("switching-chain");
+      try {
+        await switchChain({ chainId: CHAIN_ID });
+        // Brief wait for walletClient to update
+        await new Promise((r) => setTimeout(r, 800));
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setMessages((m) => [...m, { role: "system", content: `Could not switch to Base Sepolia: ${msg}` }]);
+        setStep("idle");
+        return;
+      }
+    }
+
     if (!walletClient) {
-      setMessages((m) => [
-        ...m,
-        { role: "system", content: "Wallet not ready — switch to Base Sepolia (chain 84532) and retry." },
-      ]);
+      setMessages((m) => [...m, { role: "system", content: "Wallet not ready — please try again." }]);
+      setStep("idle");
       return;
     }
 
@@ -153,21 +157,19 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: MODEL, prompt: text }),
       });
-      if (!qRes.ok) throw new Error(`Quote error ${qRes.status}: ${await qRes.text()}`);
+      if (!qRes.ok) throw new Error(`Quote failed: ${await qRes.text()}`);
       const quote = await qRes.json();
 
-      // 2. Build request payload + prompt hash
+      // 2. Build payload + prompt hash
       const requestPayload = {
         model: MODEL,
         messages: history
           .filter((m) => m.role !== "system")
           .map((m) => ({ role: m.role, content: m.content })),
       };
-      const canonical = JSON.stringify({
-        model: requestPayload.model,
-        messages: requestPayload.messages,
-      });
-      const promptHash = keccak256(toBytes(canonical));
+      const promptHash = keccak256(
+        toBytes(JSON.stringify({ model: requestPayload.model, messages: requestPayload.messages }))
+      );
 
       const intent = {
         owner: address,
@@ -182,7 +184,7 @@ export default function Page() {
         nonce: String(nonce),
       };
 
-      // 3. Sign intent (EIP-712, gasless)
+      // 3. Sign compute intent (EIP-712, gasless)
       setStep("sign-intent");
       const intentSig = await walletClient.signTypedData({
         domain: {
@@ -201,7 +203,7 @@ export default function Page() {
         },
       });
 
-      // 4. Read USDC domain + permit nonce from chain
+      // 4. Read USDC nonce + domain, sign permit (EIP-2612, gasless)
       setStep("sign-permit");
       let usdcName = "USD Coin";
       let usdcVer = "2";
@@ -222,14 +224,8 @@ export default function Page() {
         deadline: quote.expiresAt,
       };
 
-      // Sign permit (EIP-2612, gasless)
       const permitSig = await walletClient.signTypedData({
-        domain: {
-          name: usdcName,
-          version: usdcVer,
-          chainId: BigInt(CHAIN_ID),
-          verifyingContract: USDC_ADDRESS,
-        },
+        domain: { name: usdcName, version: usdcVer, chainId: BigInt(CHAIN_ID), verifyingContract: USDC_ADDRESS },
         types: PERMIT_TYPES,
         primaryType: "Permit",
         message: {
@@ -241,7 +237,7 @@ export default function Page() {
         },
       });
 
-      // 5. Submit to solver
+      // 5. Submit to solver → triggers real 0G compute + USDC settlement
       setStep("submitting");
       const sRes = await fetch(`${SOLVER_URL}/v1/intent/submit`, {
         method: "POST",
@@ -255,7 +251,7 @@ export default function Page() {
           quoteId: quote.quoteId,
         }),
       });
-      if (!sRes.ok) throw new Error(`Submit error ${sRes.status}: ${await sRes.text()}`);
+      if (!sRes.ok) throw new Error(`Submit failed (${sRes.status}): ${await sRes.text()}`);
       const result = await sRes.json();
 
       setNonce((n) => n + 1);
@@ -271,7 +267,6 @@ export default function Page() {
       ]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      // User rejected signature — don't spam, just show clean message
       if (msg.toLowerCase().includes("user rejected") || msg.toLowerCase().includes("denied")) {
         setMessages((m) => [...m, { role: "system", content: "Signature cancelled." }]);
       } else {
@@ -280,130 +275,208 @@ export default function Page() {
     } finally {
       setStep("idle");
     }
-  }, [input, step, address, walletClient, publicClient, messages, nonce]);
+  }, [input, step, address, chainId, walletClient, publicClient, messages, nonce, switchChain]);
 
-  // Keyboard handler
   function onKey(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   }
 
   const busy = step !== "idle";
   const canSend = !!input.trim() && !!address && !busy;
+  const hasMessages = messages.length > 0 || busy;
 
   // ─── Render ───────────────────────────────────────────────
 
   return (
     <div className="shell">
-      {/* Header */}
+
+      {/* ── Header ── */}
       <header className="header">
-        <div className="header-left">
-          <span className="wordmark">0friction</span>
-          <span className="tagline">AI compute via 0G · Pay with USDC</span>
+        <div className="header-brand">
+          <div className="brand-icon">⚡</div>
+          <div className="brand-text">
+            <span className="brand-name">0friction</span>
+            <span className="brand-sub">AI compute via 0G</span>
+          </div>
         </div>
         <div className="header-right">
           {balance !== null && (
-            <div className="badge">{balance} USDC</div>
+            <div className="badge-usdc">
+              <span>💰</span>
+              <span>{balance} USDC</span>
+            </div>
           )}
           {spent > 0 && (
-            <div className="badge warn">${spent.toFixed(4)} spent</div>
+            <div className="badge-spent">
+              <span>${spent.toFixed(4)} spent</span>
+            </div>
           )}
           {address ? (
             <button className="wallet-btn connected" onClick={() => disconnect()}>
+              <span>●</span>
               {address.slice(0, 6)}…{address.slice(-4)}
             </button>
           ) : (
             <button className="wallet-btn" onClick={() => connect({ connector: connectors[0] })}>
+              <span>🔗</span>
               Connect Wallet
             </button>
           )}
         </div>
       </header>
 
-      {/* Chat */}
+      {/* ── Chat / Landing ── */}
       <div className="chat" ref={chatRef}>
-        {messages.length === 0 && !busy && (
-          <div className="empty">
-            <div className="empty-icon">⚡</div>
-            <h2>0friction</h2>
-            <p>
-              Chat with AI on 0G Compute Network. Pay per message with USDC on
-              Base — no bridging, no gas, no A0GI tokens needed.
+        {!hasMessages ? (
+          <div className="landing">
+            <div className="landing-icon-wrap">
+              <div className="landing-icon">⚡</div>
+              <div className="landing-icon-dot" />
+            </div>
+
+            <h1>AI Without the Friction</h1>
+
+            <p className="landing-sub">
+              Chat with AI on 0G Compute Network. Pay per message with
+              USDC on Base — no bridging, no gas, no tokens needed.
             </p>
-            <div className="pill-row">
-              <span className="pill">🔐 Gasless Signatures</span>
-              <span className="pill">💰 USDC on Base</span>
-              <span className="pill">⚡ 0G Compute</span>
-              <span className="pill">🤖 qwen-2.5-7b</span>
+
+            <div className="pills">
+              <span className="pill"><span className="pill-icon">🔐</span> Gasless Signatures</span>
+              <span className="pill"><span className="pill-icon">💰</span> USDC on Base</span>
+              <span className="pill"><span className="pill-icon">⚡</span> 0G Compute</span>
+              <span className="pill"><span className="pill-icon">🤖</span> qwen-2.5-7b</span>
+            </div>
+
+            <div className="feature-grid">
+              <div className="feature-card">
+                <div className="feature-card-icon">⚡</div>
+                <h3>Instant Access</h3>
+                <p>No sign-ups or subscriptions. Just connect and start chatting.</p>
+              </div>
+              <div className="feature-card">
+                <div className="feature-card-icon">💳</div>
+                <h3>Pay Per Use</h3>
+                <p>Only pay for what you use. Transparent pricing per message.</p>
+              </div>
+              <div className="feature-card">
+                <div className="feature-card-icon">🤖</div>
+                <h3>Powerful Models</h3>
+                <p>Access state-of-the-art AI models via decentralized compute.</p>
+              </div>
             </div>
           </div>
-        )}
+        ) : (
+          <div className="messages">
+            {messages.map((m, i) => (
+              <div key={i} className={`msg ${m.role}`}>
+                <div className="bubble">{m.content}</div>
+                {m.role === "assistant" && m.cost && (
+                  <div className="msg-meta">
+                    <span className="meta-cost">💳 ${m.cost} USDC</span>
+                    <span>{MODEL}</span>
+                  </div>
+                )}
+              </div>
+            ))}
 
-        {messages.map((m, i) => (
-          <div key={i} className={`msg ${m.role}`}>
-            <div className="bubble">{m.content}</div>
-            {m.role === "assistant" && (m.cost || m.jobId) && (
-              <div className="msg-meta">
-                {m.cost && <span className="meta-cost">💳 ${m.cost} USDC</span>}
-                {m.jobId && <span className="meta-model">{MODEL}</span>}
-              </div>
-            )}
-          </div>
-        ))}
-
-        {busy && (
-          <div className="progress-card">
-            <div className={`progress-step ${step === "quoting" ? "active" : "done"}`}>
-              {step === "quoting" ? <div className="spinner" /> : "✓"}
-              <span>Getting price quote</span>
-            </div>
-            {step !== "quoting" && (
-              <div className={`progress-step ${step === "sign-intent" ? "active" : "done"}`}>
-                {step === "sign-intent" ? <div className="spinner" /> : "✓"}
-                <span>Sign compute intent (EIP-712)</span>
-              </div>
-            )}
-            {(step === "sign-permit" || step === "submitting") && (
-              <div className={`progress-step ${step === "sign-permit" ? "active" : "done"}`}>
-                {step === "sign-permit" ? <div className="spinner" /> : "✓"}
-                <span>Sign USDC permit (EIP-2612)</span>
-              </div>
-            )}
-            {step === "submitting" && (
-              <div className="progress-step active">
-                <div className="spinner" />
-                <span>Running AI on 0G Compute…</span>
+            {busy && (
+              <div className="progress-card">
+                {step === "switching-chain" && (
+                  <div className="progress-step active">
+                    <div className="spinner" />
+                    <span>Switching to Base Sepolia…</span>
+                  </div>
+                )}
+                {step !== "switching-chain" && (
+                  <div className={`progress-step ${step === "quoting" ? "active" : "done"}`}>
+                    {step === "quoting" ? <div className="spinner" /> : "✓"}
+                    <span>Getting price quote</span>
+                  </div>
+                )}
+                {(step === "sign-intent" || step === "sign-permit" || step === "submitting") && (
+                  <div className={`progress-step ${step === "sign-intent" ? "active" : "done"}`}>
+                    {step === "sign-intent" ? <div className="spinner" /> : "✓"}
+                    <span>Sign compute intent (EIP-712)</span>
+                  </div>
+                )}
+                {(step === "sign-permit" || step === "submitting") && (
+                  <div className={`progress-step ${step === "sign-permit" ? "active" : "done"}`}>
+                    {step === "sign-permit" ? <div className="spinner" /> : "✓"}
+                    <span>Sign USDC permit (EIP-2612)</span>
+                  </div>
+                )}
+                {step === "submitting" && (
+                  <div className="progress-step active">
+                    <div className="spinner" />
+                    <span>Running AI on 0G Compute…</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Input */}
+      {/* ── Input bar ── */}
       <div className="input-bar">
-        <div className="input-row">
-          <textarea
-            ref={textRef}
-            className="input-field"
-            rows={1}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKey}
-            placeholder={address ? "Message…" : "Connect wallet to start"}
-            disabled={!address || busy}
-          />
-          <button className="send-btn" onClick={send} disabled={!canSend}>
-            ↑
-          </button>
-        </div>
-        <div className="input-hint">
-          {address
-            ? "Each message uses 2 gasless signatures · Powered by 0G Compute"
-            : "Connect MetaMask on Base Sepolia (chain 84532)"}
+        <div className="input-inner">
+          <div className="input-row">
+            <textarea
+              ref={textRef}
+              className="input-field"
+              rows={1}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKey}
+              placeholder={
+                !address
+                  ? "Connect wallet to start"
+                  : isWrongChain
+                  ? "Wrong network — will auto-switch on send"
+                  : "Message…"
+              }
+              disabled={!address || busy}
+            />
+            <button className="send-btn" onClick={send} disabled={!canSend}>
+              ↑
+            </button>
+          </div>
+
+          <div className="status-bar">
+            <div className="status-dot" />
+            <span>Base Sepolia (Chain 84532)</span>
+            <span>·</span>
+            <span>~$0.001 per message</span>
+          </div>
         </div>
       </div>
+
+      {/* ── Footer ── */}
+      <footer className="footer">
+        <div className="footer-left">
+          <span>⚡</span>
+          <span>Powered by 0G Compute Network</span>
+        </div>
+        <div className="footer-right">
+          <a
+            href="https://github.com/officialcmg/0friction"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="footer-link"
+          >
+            GitHub <span>›</span>
+          </a>
+          <a
+            href="https://0g.ai"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="footer-link"
+          >
+            0G Network <span>›</span>
+          </a>
+        </div>
+      </footer>
     </div>
   );
 }

@@ -27,23 +27,27 @@ Users pay with **USDC on Base** via gasless EIP-2612 permit signatures. The 0fri
 
 ```bash
 # Clone
-git clone https://github.com/your-repo/0friction
+git clone https://github.com/officialcmg/0friction
 cd 0friction
 
-# Install
+# Install all workspaces
 npm install
 cd frontend && npm install && cd ..
 
 # Configure
 cp .env.example .env
-# Edit .env with your keys
+# Fill in SOLVER_PRIVATE_KEY and RPC URLs
 
-# Run backend (mock mode for testing)
-ENABLE_MOCK_FALLBACK=true npm run dev --workspace=backend
+# Terminal 1 — backend (real 0G inference)
+npm run dev --workspace=backend
 
-# Run frontend (separate terminal)
+# Terminal 2 — frontend (Next.js)
 cd frontend && npm run dev
+# Open http://localhost:3000
+# Connect MetaMask on Base Sepolia (chain 84532)
 ```
+
+> **Note:** The solver wallet needs A0GI on 0G Galileo for ledger deposits. The demo solver (`0xB9a33C...`) is pre-funded.
 
 ## Project Structure
 
@@ -61,9 +65,13 @@ cd frontend && npm run dev
 
 | Component | Location |
 |-----------|----------|
-| IntentRegistry | `0x01D1084d915eAb33A36FBaBFC29Dc8e6478b0926` on 0G Galileo (chain 16602) |
-| Solver Address | `0xB9a33C169d1360E6AdFf7266797f85467856bCc2` |
+| IntentRegistry | [`0x01D1084d915eAb33A36FBaBFC29Dc8e6478b0926`](https://chainscan-newton.0g.ai/address/0x01D1084d915eAb33A36FBaBFC29Dc8e6478b0926) on 0G Galileo (chain 16602) |
+| Solver Address | `0xB9a33C169d1360E6AdFf7266797f85467856bCc2` on 0G Galileo |
 | USDC (Base Sepolia) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| 0G Ledger Contract | `0xE70830508dAc0A97e6c087c75f402f9Be669E406` (testnet) |
+| 0G Inference Contract | `0xa79F4c8311FF93C06b8CfB403690cc987c93F91E` (testnet) |
+| AI Provider (qwen) | `0xa48f01287233509FD694a22Bf840225062E67836` |
+| Model | `qwen/qwen-2.5-7b-instruct` via 0G Compute TEE |
 
 ## SDK Usage
 

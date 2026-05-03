@@ -35,9 +35,11 @@ export async function initBroker(): Promise<void> {
     try {
       const services = await broker.inference.listService();
       console.log(`📋 Found ${services.length} service(s) on 0G`);
-      const chatServices = services.filter((s: any) => s.serviceType === "chatbot");
-      for (const svc of chatServices) {
-        console.log(`   📡 ${svc.model} @ ${svc.providerAddress?.slice(0, 10)}...`);
+      for (const svc of services) {
+        const addr = Array.isArray(svc) ? svc[0] : svc.providerAddress;
+        const model = Array.isArray(svc) ? svc[6] : svc.model;
+        const type = Array.isArray(svc) ? svc[1] : svc.serviceType;
+        console.log(`   📡 [${type}] ${model} @ ${addr?.slice(0, 10)}...`);
       }
     } catch (err: any) {
       console.warn(`⚠️  Could not list services: ${err.message}`);
@@ -74,19 +76,28 @@ export async function executeCompute(
   }
 
   // Find provider for the requested model
+  // Services are arrays: [providerAddr, serviceType, endpoint, inputPrice, outputPrice, updatedAt, model, ...]
   const services = await broker.inference.listService();
-  const service = services.find((s: any) => s.model === model)
-    ?? services.find((s: any) => s.serviceType === "chatbot");
+  const service = services.find((s: any) => {
+    const sModel = Array.isArray(s) ? s[6] : s.model;
+    return sModel === model;
+  }) ?? services.find((s: any) => {
+    const sType = Array.isArray(s) ? s[1] : s.serviceType;
+    return sType === "chatbot";
+  });
 
   if (!service) {
-    throw new Error(`No provider found for model: ${model}. Available: ${services.map((s: any) => s.model).join(", ")}`);
+    throw new Error(`No provider found for model: ${model}`);
   }
 
-  const providerAddress = service.providerAddress;
-  console.log(`⚡ Using provider ${providerAddress?.slice(0, 10)}... model=${service.model}`);
+  // Parse service tuple for provider address + model
+  const providerAddress = Array.isArray(service) ? service[0] : service.providerAddress;
+  const providerModel = Array.isArray(service) ? service[6] : service.model;
 
-  // Get service metadata
-  const { endpoint, model: providerModel } = await broker.inference.getServiceMetadata(providerAddress);
+  // Use getServiceMetadata to get the real proxy endpoint (has /v1/proxy suffix)
+  const { endpoint } = await broker.inference.getServiceMetadata(providerAddress);
+
+  console.log(`⚡ Provider: ${providerAddress?.slice(0, 10)}... model=${providerModel} endpoint=${endpoint}`);
 
   // Generate per-request auth headers (TEE)
   const headers = await broker.inference.getRequestHeaders(providerAddress);

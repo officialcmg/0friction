@@ -92,6 +92,8 @@ router.post("/", async (req, res) => {
 
     let settlementTxHash = "";
     try {
+      console.log(`💳 Starting settlement for ${permit.owner}...`);
+      console.log(`   permit.value=${permit.value}, permit.deadline=${permit.deadline}, permit.nonce=${permit.nonce}`);
       const result = await settlePayment({
         permit: {
           owner: permit.owner as `0x${string}`,
@@ -103,8 +105,10 @@ router.post("/", async (req, res) => {
         actualChargeAtomic: BigInt(storedQuote.maxChargeUsdcAtomic),
       });
       settlementTxHash = result.txHash;
+      console.log(`✅ Settlement tx: ${settlementTxHash}`);
     } catch (err: any) {
-      console.warn(`⚠️  Settlement failed: ${err.message}`);
+      console.error(`❌ SETTLEMENT FAILED: ${err.message}`);
+      console.error(`   Stack: ${err.stack?.split("\n").slice(0, 3).join(" -> ")}`);
       // Don't fail the whole request — return the AI response anyway
       updateJob(job.jobId, {
         status: "FAILED_SETTLEMENT",
@@ -113,17 +117,18 @@ router.post("/", async (req, res) => {
       });
     }
 
-    if (settlementTxHash && !settlementTxHash.startsWith("mock")) {
+    if (settlementTxHash && settlementTxHash.startsWith("0x")) {
+      // Real on-chain settlement succeeded
       updateJob(job.jobId, {
         status: "SETTLED",
         chargedUsdc: storedQuote.maxChargeUsdc,
         settlementTxHash,
       });
     } else {
-      // Mock or no settlement — still mark as settled for demo
+      // Mock, insufficient USDC, or no settlement
       updateJob(job.jobId, {
         status: "SETTLED",
-        chargedUsdc: storedQuote.maxChargeUsdc,
+        chargedUsdc: settlementTxHash?.includes("insufficient") ? "0" : storedQuote.maxChargeUsdc,
         settlementTxHash: settlementTxHash || "pending",
       });
     }

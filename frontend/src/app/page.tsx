@@ -433,8 +433,8 @@ export default function Page() {
                 !address
                   ? "Connect wallet to start"
                   : isWrongChain
-                  ? "Wrong network — will auto-switch on send"
-                  : "Message…"
+                    ? "Wrong network — will auto-switch on send"
+                    : "Message…"
               }
               disabled={!address || busy}
             />

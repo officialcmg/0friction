@@ -14,8 +14,9 @@ const USDC_ABI = parseAbi([
 /**
  * Execute USDC settlement on the home chain (Base Sepolia).
  *
- * 1. Call permit() using the user's off-chain signature to set allowance
- * 2. Call transferFrom() to pull USDC from user to solver
+ * 1. Check user's USDC balance
+ * 2. Call permit() using the user's off-chain signature to set allowance
+ * 3. Call transferFrom() to pull USDC from user to solver
  *
  * Returns the settlement transaction hash.
  */
@@ -47,6 +48,21 @@ export async function settlePayment(params: {
     transport: http(config.homeChainRpc),
   });
 
+  // Pre-flight: check user's USDC balance
+  const userBalance = await publicClient.readContract({
+    address: config.usdcAddress,
+    abi: USDC_ABI,
+    functionName: "balanceOf",
+    args: [params.permit.owner],
+  });
+
+  console.log(`   User USDC balance: ${userBalance} atomic (need ${params.actualChargeAtomic})`);
+
+  if (userBalance < params.actualChargeAtomic) {
+    console.warn(`⚠️  User has insufficient USDC (${userBalance} < ${params.actualChargeAtomic}) — skipping settlement`);
+    return { txHash: `insufficient_usdc_${Date.now()}` };
+  }
+
   // Split signature into v, r, s
   const sig = params.permitSignature;
   const r = `0x${sig.slice(2, 66)}` as `0x${string}`;
@@ -75,11 +91,23 @@ export async function settlePayment(params: {
     console.log(`✅ Permit executed: ${permitTx}`);
   } catch (err: any) {
     // Permit may already be used or allowance already set — check allowance
-    console.warn(`⚠️  Permit call failed (may already be set): ${err.message}`);
+    console.warn(`⚠️  Permit call failed: ${err.message?.slice(0, 120)}`);
+
+    // Verify allowance exists anyway
+    const allowance = await publicClient.readContract({
+      address: config.usdcAddress,
+      abi: USDC_ABI,
+      functionName: "allowance",
+      args: [params.permit.owner, params.permit.spender],
+    });
+    console.log(`   Current allowance: ${allowance}`);
+    if (allowance < params.actualChargeAtomic) {
+      throw new Error(`Permit failed AND allowance insufficient (${allowance} < ${params.actualChargeAtomic})`);
+    }
   }
 
   // Step 2: Execute transferFrom
-  console.log(`💰 Pulling ${params.actualChargeAtomic} USDC atomic units...`);
+  console.log(`💰 Pulling ${params.actualChargeAtomic} USDC atomic units from ${params.permit.owner}...`);
   const transferTx = await walletClient.writeContract({
     address: config.usdcAddress,
     abi: USDC_ABI,
@@ -96,3 +124,4 @@ export async function settlePayment(params: {
 
   return { txHash: transferTx };
 }
+
